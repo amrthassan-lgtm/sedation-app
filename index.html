@@ -227,7 +227,7 @@ h3{font-weight:600}
 .vitals-row{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end}
 .field-wrap{display:flex;flex-direction:column}
 .field-label{font-size:var(--fs-xs);font-weight:600;letter-spacing:.5px;text-transform:uppercase;color:rgba(255,255,255,.4);margin-bottom:6px}
-.field-hint{color:rgba(255,255,255,.22);font-weight:400;margin-left:4px;text-transform:none;letter-spacing:0}
+.field-hint{color:rgba(255,255,255,.5);font-weight:400;margin-left:4px;text-transform:none;letter-spacing:0}
 .bp-pair{display:flex;align-items:center}
 .bp-sep{padding:0 8px;font-size:18px;color:rgba(255,255,255,.2);background:#0d1527;border:1px solid rgba(255,255,255,.10);border-left:none;border-right:none;min-height:52px;display:flex;align-items:center}
 .bp-sys{border-radius:var(--r-md) 0 0 12px!important;border-right:none!important}
@@ -253,9 +253,9 @@ h3{font-weight:600}
 .drug-btn:disabled{opacity:.35;cursor:not-allowed}
 /* .btn-once — tap once, stays locked after cooldown. Add to any exec() button. */
 /* Usage: class="drug-btn btn-once" or class="btn-action btn-once" */
-.drug-btn-name{font-size:var(--fs-ghost);font-weight:700;color:rgba(255,255,255,.38);letter-spacing:.8px;text-transform:uppercase}
+.drug-btn-name{font-size:var(--fs-sub);font-weight:700;color:rgba(255,255,255,.65);letter-spacing:.8px;text-transform:uppercase}
 .drug-btn-dose{font-size:var(--fs-ui);font-weight:800;color:rgba(255,255,255,.9);letter-spacing:.2px;font-family:var(--mono)}
-.drug-btn-sub{font-size:var(--fs-ghost);color:rgba(255,255,255,.28);font-family:var(--mono);letter-spacing:.3px;line-height:1.2}
+.drug-btn-sub{font-size:var(--fs-sub);color:rgba(255,255,255,.5);font-family:var(--mono);letter-spacing:.3px;line-height:1.2}
 .drug-btn.versed  {background-image:linear-gradient(var(--orange),var(--orange))}
 .drug-btn.fentanyl{background-image:linear-gradient(var(--blue),var(--blue))}
 .drug-btn.zofran  {background-image:linear-gradient(var(--slate),var(--slate))}
@@ -1489,9 +1489,9 @@ h2.step-h2 ~ .row:first-of-type { margin-top:14px; }
   border-radius: var(--r-md);
 }
 .sdc-drugs .drug-btn-name {
-  font-size: var(--fs-ghost);
+  font-size: var(--fs-sub);
   font-weight: 600;
-  color: rgba(255,255,255,.38);
+  color: rgba(255,255,255,.65);
   letter-spacing: .5px;
   text-transform: uppercase;
 }
@@ -3779,7 +3779,7 @@ h2.step-h2 ~ .row:first-of-type { margin-top:14px; }
       <div class="row">
         <div>
           <div class="field-label">Weight<span class="field-hint">lbs</span></div>
-          <input id="weight" type="number" inputmode="decimal" class="required-field input-md" placeholder="Weight" oninput="calcBMI();validateRequired();updatePhase1Checklist();updateIVMaxDisplay()"/>
+          <input id="weight" type="number" inputmode="decimal" class="required-field input-md" placeholder="Weight in lbs" aria-label="Weight in pounds" oninput="calcBMI();validateRequired();updatePhase1Checklist();updateIVMaxDisplay()"/>
         </div>
         <div>
           <div class="field-label">Height<span class="field-hint">ft · in</span></div>
@@ -6143,7 +6143,7 @@ function exec(btn, fn) {
   // Store timeout ID on button so undo can cancel it
   btn._lockTimer = setTimeout(() => {
     btn._lockTimer = null;
-    const t = new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+    const t = new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',hour12:false});
     if (btn.classList.contains('btn-once')) {
       applyLockedState(btn, t);
       btn.classList.remove('locked'); // hide checkmark — keep disabled
@@ -6957,44 +6957,82 @@ startLocalAnestheticAutoUpdate();
 
 let wakeLock = null;
 let sedationActive = false;
-let wakeLockSupported = 'wakeLock' in navigator;
+const wakeLockApiPresent = 'wakeLock' in navigator;
+let wakeLockHeartbeat = null;
+let wakeLockWarnedUnavailable = false;
 
 async function enableWakeLock() {
-  if (!wakeLockSupported) return;
+  if (!wakeLockApiPresent) return;
+  if (document.visibilityState !== 'visible') return;
+  if (wakeLock !== null) return; // already holding a lock
   try {
     wakeLock = await navigator.wakeLock.request('screen');
-    wakeLock.addEventListener('release', () => { wakeLock = null; });
+    wakeLock.addEventListener('release', () => {
+      wakeLock = null;
+      // OS / browser released the lock (battery saver, policy, etc.) —
+      // try to reacquire if the page is still in front of the user.
+      if (document.visibilityState === 'visible') {
+        setTimeout(() => { enableWakeLock(); }, 500);
+      }
+    });
     showWakeLockIndicator(true);
   } catch (err) {
-    wakeLockSupported = false;
+    // Do NOT permanently disable — transient policy refusals (e.g. before
+    // first user gesture) are recoverable. The heartbeat and gesture
+    // listeners will retry.
+    if (!wakeLockWarnedUnavailable) {
+      console.warn('Wake lock request failed:', err && err.message);
+      wakeLockWarnedUnavailable = true;
+    }
   }
 }
 
 async function disableWakeLock() {
-  if (!wakeLockSupported || wakeLock === null) return;
+  if (wakeLock === null) return;
   try { await wakeLock.release(); wakeLock = null; showWakeLockIndicator(false); }
-  catch (err) { /* wake lock release error — non-critical */ }
+  catch (err) { console.warn('Wake lock release failed:', err && err.message); }
 }
 
 function showWakeLockIndicator(active) {
-  if (!wakeLockSupported) return;
+  if (!wakeLockApiPresent) return;
   const indicator = document.getElementById('save_indicator');
   if (!indicator) return;
   if (active) indicator.style.color = 'var(--warn)';
   else indicator.style.color = '';
 }
 
-// Always keep screen awake while app is open — re-acquire on visibility change
-document.addEventListener('visibilitychange', async () => {
-  if (!wakeLockSupported) return;
+function startWakeLockHeartbeat() {
+  if (wakeLockHeartbeat) return;
+  // Periodically attempt reacquire. Browsers sometimes release the lock
+  // without firing the 'release' event in time, and some Samsung Internet
+  // builds drop the lock under battery-saver / doze.
+  wakeLockHeartbeat = setInterval(() => {
+    if (document.visibilityState === 'visible' && wakeLock === null) {
+      enableWakeLock();
+    }
+  }, 15000);
+}
+
+// Reacquire when the tab comes back to the foreground.
+document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && wakeLock === null) {
-    await enableWakeLock();
+    enableWakeLock();
   }
 });
 
-// Request wake lock immediately on page load
+// First-gesture retry: some browsers require a user gesture before
+// granting the lock. Listen on the document; the handler is cheap and
+// short-circuits once a lock is held.
+function wakeLockGestureRetry() {
+  if (wakeLock === null) enableWakeLock();
+}
+document.addEventListener('touchstart', wakeLockGestureRetry, { passive: true });
+document.addEventListener('click', wakeLockGestureRetry, { passive: true });
+
+// Initial attempt + start the heartbeat.
 document.addEventListener('DOMContentLoaded', () => {
   enableWakeLock();
+  startWakeLockHeartbeat();
 });
 
 // ============================================================================
@@ -7190,7 +7228,7 @@ function showUndoToast(action) {
     else if (ev.includes('n₂o') || ev.includes('n2o')) toneClass = 'tone-n2o';
   }
 
-  const timeStr = new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+  const timeStr = new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',hour12:false});
 
   // Clear any existing toast
   container.innerHTML = '';
@@ -7457,6 +7495,8 @@ function saveSession() {
     setTimeout(restoreBtnOnceState, 200);
     return true;
   } catch (e) {
+    console.error('saveSession failed:', e);
+    try { updateSaveIndicator('Error'); } catch (_) {}
     return false;
   }
 }
@@ -7480,15 +7520,15 @@ function restoreSession() {
           const ptProv  = data.prov ? data.prov  : '—';
           apexConfirm(
             'Previous session found',
-            'A session from ' + savedDate + ' is saved:',
-            'Keep session',
+            'A chart from ' + savedDate + ' is saved. Is this the <strong>same patient</strong>?',
+            'Yes — same patient',
             '',
             [
-              '👤 ' + ptName + '  ·  MRN ' + ptMRN,
+              '👤 <strong>' + ptName + '</strong>  ·  MRN ' + ptMRN,
               '🦷 ' + ptProc,
               '🩺 ' + ptProv
             ],
-            'Clear it'
+            'No — start new chart'
           ).then(keep => { if (!keep) clearSession(); });
         }, 800);
       }
@@ -7629,6 +7669,7 @@ function restoreSession() {
     setTimeout(restoreBtnOnceState, 200);
     return true;
   } catch (e) {
+    console.error('restoreSession failed:', e);
     return false;
   }
 }
@@ -7667,12 +7708,17 @@ function updateSaveIndicator(status) {
     indicator.textContent = '●';
     indicator.style.color = 'var(--good)';
     if (timeEl) {
-      const t = new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+      const t = new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',hour12:false});
       timeEl.textContent = t;
+      timeEl.style.color = '';
     }
   } else if (status === 'Error') {
+    indicator.textContent = '⚠';
     indicator.style.color = 'var(--danger)';
-    if (timeEl) timeEl.textContent = '';
+    if (timeEl) {
+      timeEl.textContent = 'Save failed';
+      timeEl.style.color = 'var(--danger)';
+    }
   }
 }
 
@@ -7784,7 +7830,7 @@ function formatDateUS(dateStr) {
   const y = parts[0];
   return `${m}/${d}/${y}`;
 }
-const timeStr = d => d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+const timeStr = d => d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
 
 
 // ── Get selected assistants joined into a clinical-note string ──
