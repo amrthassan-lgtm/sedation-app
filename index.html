@@ -7504,7 +7504,11 @@ function restoreSession() {
     if (data.mrn) document.getElementById('mrn').value = data.mrn;
     if (data.prov) document.getElementById('prov').value = data.prov;
     if (data.proc) document.getElementById('proc').value = data.proc;
-    if (data.asst) getAssistants() = data.asst;
+    if (Array.isArray(data.asst_selected)) {
+      document.querySelectorAll('.asst-cb').forEach(cb => {
+        cb.checked = data.asst_selected.includes(cb.value);
+      });
+    }
     if (data.assessment_date) document.getElementById('assessment_date').value = data.assessment_date;
     if (data.service_date) document.getElementById('service_date').value = data.service_date;
     if (data.care_name) document.getElementById('care_name').value = data.care_name;
