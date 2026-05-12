@@ -6957,44 +6957,82 @@ startLocalAnestheticAutoUpdate();
 
 let wakeLock = null;
 let sedationActive = false;
-let wakeLockSupported = 'wakeLock' in navigator;
+const wakeLockApiPresent = 'wakeLock' in navigator;
+let wakeLockHeartbeat = null;
+let wakeLockWarnedUnavailable = false;
 
 async function enableWakeLock() {
-  if (!wakeLockSupported) return;
+  if (!wakeLockApiPresent) return;
+  if (document.visibilityState !== 'visible') return;
+  if (wakeLock !== null) return; // already holding a lock
   try {
     wakeLock = await navigator.wakeLock.request('screen');
-    wakeLock.addEventListener('release', () => { wakeLock = null; });
+    wakeLock.addEventListener('release', () => {
+      wakeLock = null;
+      // OS / browser released the lock (battery saver, policy, etc.) —
+      // try to reacquire if the page is still in front of the user.
+      if (document.visibilityState === 'visible') {
+        setTimeout(() => { enableWakeLock(); }, 500);
+      }
+    });
     showWakeLockIndicator(true);
   } catch (err) {
-    wakeLockSupported = false;
+    // Do NOT permanently disable — transient policy refusals (e.g. before
+    // first user gesture) are recoverable. The heartbeat and gesture
+    // listeners will retry.
+    if (!wakeLockWarnedUnavailable) {
+      console.warn('Wake lock request failed:', err && err.message);
+      wakeLockWarnedUnavailable = true;
+    }
   }
 }
 
 async function disableWakeLock() {
-  if (!wakeLockSupported || wakeLock === null) return;
+  if (wakeLock === null) return;
   try { await wakeLock.release(); wakeLock = null; showWakeLockIndicator(false); }
-  catch (err) { /* wake lock release error — non-critical */ }
+  catch (err) { console.warn('Wake lock release failed:', err && err.message); }
 }
 
 function showWakeLockIndicator(active) {
-  if (!wakeLockSupported) return;
+  if (!wakeLockApiPresent) return;
   const indicator = document.getElementById('save_indicator');
   if (!indicator) return;
   if (active) indicator.style.color = 'var(--warn)';
   else indicator.style.color = '';
 }
 
-// Always keep screen awake while app is open — re-acquire on visibility change
-document.addEventListener('visibilitychange', async () => {
-  if (!wakeLockSupported) return;
+function startWakeLockHeartbeat() {
+  if (wakeLockHeartbeat) return;
+  // Periodically attempt reacquire. Browsers sometimes release the lock
+  // without firing the 'release' event in time, and some Samsung Internet
+  // builds drop the lock under battery-saver / doze.
+  wakeLockHeartbeat = setInterval(() => {
+    if (document.visibilityState === 'visible' && wakeLock === null) {
+      enableWakeLock();
+    }
+  }, 15000);
+}
+
+// Reacquire when the tab comes back to the foreground.
+document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && wakeLock === null) {
-    await enableWakeLock();
+    enableWakeLock();
   }
 });
 
-// Request wake lock immediately on page load
+// First-gesture retry: some browsers require a user gesture before
+// granting the lock. Listen on the document; the handler is cheap and
+// short-circuits once a lock is held.
+function wakeLockGestureRetry() {
+  if (wakeLock === null) enableWakeLock();
+}
+document.addEventListener('touchstart', wakeLockGestureRetry, { passive: true });
+document.addEventListener('click', wakeLockGestureRetry, { passive: true });
+
+// Initial attempt + start the heartbeat.
 document.addEventListener('DOMContentLoaded', () => {
   enableWakeLock();
+  startWakeLockHeartbeat();
 });
 
 // ============================================================================
